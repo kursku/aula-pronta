@@ -1,0 +1,27 @@
+1
+00:00:01,000 --> 00:00:06,000
+Oi, pessoal! Hoje a aula é sobre rega: quando regar e quanto.
+
+2
+00:00:06,500 --> 00:00:14,000
+Primeiro, como saber se a terra está pedindo água.
+
+3
+00:00:20,000 --> 00:00:32,000
+Use o teste do dedo: enfie o dedo na terra até a primeira junta. Se sair seco, é hora de regar; se sair com terra grudada, espere.
+
+4
+00:00:40,000 --> 00:00:50,000
+Esse teste vale para qualquer planta da horta, em vaso ou no canteiro.
+
+5
+00:01:10,000 --> 00:01:22,000
+A alface tem raiz curta: ela pede água todo dia, um pouco de cada vez.
+
+6
+00:01:30,000 --> 00:01:40,000
+E regue de manhã cedo, para a planta passar o dia com a terra úmida.
+
+7
+00:02:00,000 --> 00:02:10,000
+Resumindo: teste do dedo, alface todo dia, de manhã cedo. Até a próxima!

@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: consultar-so-na-transcricao
+context:
+  scaffold_script: preparar-pasta.sh

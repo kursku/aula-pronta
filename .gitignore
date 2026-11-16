@@ -1,0 +1,8 @@
+.env
+.env.*
+
+# rascunhos do orquestrador (briefs e relatórios), nunca vão para o repo
+.scratch/
+evals/results/
+evals-wsl/results/
+.remember/

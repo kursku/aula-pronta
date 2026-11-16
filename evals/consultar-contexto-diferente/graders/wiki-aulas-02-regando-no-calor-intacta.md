@@ -1,0 +1,7 @@
+---
+type: regex
+target:
+  source: file
+  path: wiki/aulas/02-regando-no-calor.md
+pattern: '^-{3}\r?\ntipo: aula\r?\nnumero: 2\r?\ntranscricao-sha256: 11f7fc697ac6e9a227536f0bfe7f1744014bb97bdfcc6f9e7a62034a51865ca3\r?\nmodulo: Rega\r?\nduracao: 01:50\r?\ntitulo: Regando no calor\r?\nresumo: Mostra a frequência da rega do tomate, que é diferente da alface, e lembra o teste do dedo\.\r?\n-{3}\r?\n\r?\n# Aula 2: Regando no calor\r?\n\r?\nTranscrição original: \[transcricao\.md\]\(\.\./raw/02-regando-no-calor/transcricao\.md\)\r?\n\r?\n## Resumo\r?\nA aula lembra que o teste do dedo continua valendo antes de qualquer rega\. Depois explica que o tomate, de raiz funda, aguenta mais que a alface e pede água dia sim, dia não, com bastante água\. Veja o \[teste do dedo\]\(\.\./conceitos/teste-do-dedo\.md#definicao\), o \[índice\]\(\.\./indice\.md\) e \[mais sobre rega\]\(https://example\.com/rega\)\.\r?\n\r?\n## Conceitos que ensina\r?\n- \[Frequência da rega\]\(\.\./conceitos/frequencia-da-rega\.md\) \[00:50\]: O tomate pede água dia sim, dia não, com bastante água\.\r?\n\r?\n## Conceitos que só cita\r?\n- \[Teste do dedo\]\(\.\./conceitos/teste-do-dedo\.md\) \[00:12\]: Lembrado da aula anterior: continua valendo antes de qualquer rega\.\r?\n\r?\n## Demonstrações\r?\nNenhuma\.\r?\n\r?\n## Afirmações\r?\n- \[00:50\] \[Frequência da rega\]\(\.\./conceitos/frequencia-da-rega\.md\): "regue o tomate dia sim, dia não, com bastante água"\r?\n\s*$'
+---

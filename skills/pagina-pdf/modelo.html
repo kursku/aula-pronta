@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Página única, sem recurso externo: o CSP também barra script e link para fora. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">
+<title>{{TITULO}} · {{NOME}}</title>
+<style>
+:root { --principal: {{COR_PRINCIPAL}}; --secundaria: {{COR_SECUNDARIA}}; }
+* { box-sizing: border-box; }
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body {
+  margin: 0;
+  color: #1a1a1a;
+  background: #fff;
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  overflow-wrap: anywhere;
+}
+.marca {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 4px solid var(--principal);
+}
+.marca img { max-height: 48px; max-width: 160px; width: auto; height: auto; }
+.marca .curso { font-weight: 700; color: var(--principal); font-size: 1.1rem; }
+main { max-width: 46rem; margin: 0 auto; padding: 8px 20px 72px; }
+h1, h2, h3 { line-height: 1.25; color: var(--principal); break-after: avoid; }
+h1 { font-size: 1.8rem; margin: 1.2em 0 .4em; }
+h2 { font-size: 1.35rem; margin: 1.6em 0 .4em; padding-bottom: .2em; border-bottom: 2px solid var(--secundaria); }
+h3 { font-size: 1.1rem; margin: 1.2em 0 .3em; color: var(--secundaria); }
+p, li { orphans: 3; widows: 3; }
+table { width: 100%; border-collapse: collapse; margin: 1em 0; font-size: .95rem; table-layout: auto; }
+th, td { padding: 6px 8px; border: 1px solid var(--secundaria); text-align: left; vertical-align: top; }
+th { background: color-mix(in srgb, var(--principal) 14%, #fff); color: #1a1a1a; }
+tr, pre, blockquote { break-inside: avoid; }
+p:has(+ pre), p:has(+ table) { break-after: avoid; }
+thead { display: table-header-group; }
+pre {
+  margin: 1em 0; padding: 12px 14px;
+  background: #f4f4f5; border-left: 4px solid var(--principal); border-radius: 4px;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: .9rem;
+}
+code { font-family: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace; font-size: .92em; }
+:not(pre) > code { background: #f4f4f5; padding: 1px 5px; border-radius: 3px; }
+img { max-width: 100%; height: auto; }
+a { color: var(--principal); }
+li.task-list-item, ul.task-list { list-style: none; }
+.rodape {
+  margin: 0; padding: 12px 20px;
+  border-top: 2px solid var(--secundaria);
+  color: var(--secundaria); font-size: .85rem; text-align: center;
+}
+@page {
+  size: A4; margin: 16mm 16mm 22mm;
+  @bottom-left { content: "{{RODAPE_CSS}}"; width: 80%; font: 9pt system-ui, "Segoe UI", Arial, sans-serif; color: {{COR_SECUNDARIA}}; text-align: left; vertical-align: top; padding-top: 4mm; }
+  @bottom-right { content: counter(page) "/" counter(pages); font: 9pt system-ui, "Segoe UI", Arial, sans-serif; color: {{COR_SECUNDARIA}}; vertical-align: top; padding-top: 4mm; }
+}
+@media print {
+  body { font-size: 11pt; }
+  table { font-size: 9.5pt; }
+  .marca { padding: 0 0 8px; }
+  main { max-width: none; padding: 0; }
+  .rodape { display: none; }
+}
+</style>
+</head>
+<body>
+<header class="marca">{{LOGO}}<span class="curso">{{NOME}}</span></header>
+<main>
+$body$
+</main>
+<footer class="rodape">{{RODAPE}}</footer>
+</body>
+</html>

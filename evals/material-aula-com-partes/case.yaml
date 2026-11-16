@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: material-aula-com-partes
+context:
+  scaffold_script: preparar-pasta.sh

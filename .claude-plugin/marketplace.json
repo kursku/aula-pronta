@@ -1,0 +1,17 @@
+{
+  "name": "aula-pronta",
+  "owner": {
+    "name": "Nick Bargiela (Claude para Humanos)"
+  },
+  "metadata": {
+    "description": "Marketplace do plugin aula-pronta, para infoprodutores que usam o Claude Code."
+  },
+  "plugins": [
+    {
+      "name": "aula-pronta",
+      "source": "./",
+      "license": "MIT",
+      "description": "Transforma as aulas gravadas de um curso em material pronto para o aluno e em conhecimento organizado sobre o curso."
+    }
+  ]
+}

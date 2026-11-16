@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: transcrever-servico-falha
+context:
+  scaffold_script: preparar-pasta.sh

@@ -1,0 +1,8 @@
+---
+type: regex
+target:
+  source: file
+  path: lotes/lote-01-02.1.md
+flags: m
+pattern: '^#+[ \t]*Aula 1\b[^#]*10:32'
+---

@@ -1,0 +1,12 @@
+{
+  "name": "aula-pronta",
+  "version": "0.1.0",
+  "description": "Transforma as aulas gravadas de um curso em material pronto para o aluno e em conhecimento organizado sobre o curso.",
+  "author": {
+    "name": "Nick Bargiela (Claude para Humanos)"
+  },
+  "homepage": "https://github.com/kursku/aula-pronta",
+  "repository": "https://github.com/kursku/aula-pronta",
+  "license": "MIT",
+  "keywords": ["curso", "infoproduto", "aula", "pt-br"]
+}
