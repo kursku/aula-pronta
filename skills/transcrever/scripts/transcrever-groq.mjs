@@ -15,6 +15,12 @@ import { gerarTranscricao } from '../../pos-gravacao/scripts/srt-para-transcrica
 export const PRECO_CONFERIDO_EM = '13/11/2026';
 export const PRECO_POR_HORA = { 'whisper-large-v3-turbo': 0.04, 'whisper-large-v3': 0.111 }; // US$
 export const MODELO_PADRAO = 'whisper-large-v3-turbo';
+// Plano gratuito (sem cartão) do Whisper, em segundos de áudio (console.groq.com/docs/rate-limits).
+export const LIMITE_GRATUITO_S_POR_HORA = 7200;
+export const LIMITE_GRATUITO_S_POR_DIA = 28800;
+export const LIMITE_GRATUITO_CONFERIDO_EM = '16/11/2026';
+// Acima disto, um 429 vira erro na hora: esperar o limite do plano gratuito liberar levaria muito mais.
+export const ESPERA_MAXIMA_S = 60;
 export const MINIMO_COBRADO_S = 10; // "se enviar menos, ainda cobra 10 segundos"
 // Limite de arquivo do Groq: 25 MB (plano grátis) e 100 MB (dev). Usa o do grátis, com folga, para valer nos dois.
 export const LIMITE_BYTES = 24_000_000;
@@ -149,13 +155,25 @@ export function estimarCusto(segundos, modelo = MODELO_PADRAO) {
 const dinheiro = (d) => `US$ ${(d < 0.01 ? d.toFixed(4) : d.toFixed(2)).replace('.', ',')}`;
 const minutos = (s) => (s < 90 ? `${Math.round(s)} s` : `${Math.round(s / 60)} min`);
 
+const horas = (s) => `${s / 3600} h`;
+
+export function horasEMinutos(min) {
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60);
+  const resto = min % 60;
+  return resto ? `${h} h ${resto} min` : `${h} h`;
+}
+
 export function textoDoCusto(segundos, modelo) {
   const { dolares, porHora } = estimarCusto(segundos, modelo);
-  return (
-    `Custo estimado: ${dinheiro(dolares)} (${minutos(segundos)} de áudio no modelo ${modelo}, a US$ ${String(porHora).replace('.', ',')} por hora de áudio; ` +
-    `o Groq cobra no mínimo ${MINIMO_COBRADO_S} s por envio). Preço conferido na documentação do Groq em ${PRECO_CONFERIDO_EM}: ` +
-    'pode ter mudado e é cobrado na sua conta do Groq, não pelo aula-pronta.'
-  );
+  const texto =
+    `No plano gratuito do Groq (sem cartão): sem cobrança, até ${horas(LIMITE_GRATUITO_S_POR_HORA)} de áudio por hora e ${horas(LIMITE_GRATUITO_S_POR_DIA)} por dia ` +
+    `(conferido em ${LIMITE_GRATUITO_CONFERIDO_EM}); se passar disso, o Groq recusa e o comando para. ` +
+    `No plano pago: custo estimado ${dinheiro(dolares)} (${minutos(segundos)} de áudio no modelo ${modelo}, a US$ ${String(porHora).replace('.', ',')} por hora de áudio; ` +
+    `o Groq cobra no mínimo ${MINIMO_COBRADO_S} s por envio), cobrado na sua conta do Groq, não pelo aula-pronta. ` +
+    `Preço conferido na documentação do Groq em ${PRECO_CONFERIDO_EM}: pode ter mudado.`;
+  if (segundos <= LIMITE_GRATUITO_S_POR_HORA) return texto;
+  return `${texto} Atenção: esta gravação (${minutos(segundos)}) passa do limite por hora do plano gratuito (${horas(LIMITE_GRATUITO_S_POR_HORA)} de áudio por hora); nesse plano, o comando deve parar no meio, sem gravar nada.`;
 }
 
 // ---------- cortes ----------
@@ -163,10 +181,16 @@ export function textoDoCusto(segundos, modelo) {
 // shortcut: sem cache das partes já transcritas; uma falha no meio refaz (e cobra) tudo na próxima rodada. Guardar o parcial se isso doer.
 export const AVISO_PARTES_TALVEZ =
   'Atenção: esta gravação passa do limite de tamanho do Groq e provavelmente será enviada em várias partes. ' +
-  `Se o arquivo for cortado em partes, cada parte paga o mínimo de ${MINIMO_COBRADO_S} s, então o valor real pode ser um pouco maior. ` +
-  'Se uma parte falhar no meio, o Groq já cobrou as partes enviadas e cobra de novo por elas se você rodar outra vez (o aula-pronta não guarda o que já foi transcrito).';
+  `Se o arquivo for cortado em partes, no plano pago cada parte paga o mínimo de ${MINIMO_COBRADO_S} s, então o valor real pode ser um pouco maior. ` +
+  'Se uma parte falhar no meio, no plano pago o Groq já cobrou as partes enviadas e cobra de novo por elas se você rodar outra vez (no gratuito, elas gastam o limite de novo; o aula-pronta não guarda o que já foi transcrito).';
 export const avisoDePartes = (n) =>
-  `Vou enviar ${n} partes. Se uma falhar no meio, o Groq já cobrou as partes enviadas e cobra de novo por elas se você rodar outra vez (o aula-pronta não guarda o que já foi transcrito).`;
+  `Vou enviar ${n} partes. Se uma falhar no meio, no plano pago o Groq já cobrou as partes enviadas e cobra de novo por elas se você rodar outra vez (no gratuito, elas gastam o limite de novo; o aula-pronta não guarda o que já foi transcrito).`;
+
+// Acrescentado ao erro de uma parte depois da primeira: as `enviadas` partes anteriores vão de novo na próxima rodada.
+export const avisoDeReenvio = (enviadas) =>
+  enviadas === 1
+    ? 'A parte 1 já foi enviada ao Groq e vai de novo se você rodar outra vez (no plano pago, é cobrada de novo; no gratuito, gasta o limite de novo).'
+    : `As partes 1 a ${enviadas} já foram enviadas ao Groq e vão de novo se você rodar outra vez (no plano pago, são cobradas de novo; no gratuito, gastam o limite de novo).`;
 
 // Partes de no máximo `limite` bytes, em tempo (a taxa de bytes por segundo vem do arquivo já convertido).
 export function planejarPartes(duracao, bytes, limite = LIMITE_BYTES) {
@@ -255,7 +279,19 @@ export async function enviarParte({ dados, nome, chave, modelo, url, fetchImpl =
     if (TEMPORARIOS.has(resposta.status) || resposta.status >= 500) {
       ultimo = `o Groq respondeu ${resposta.status}`;
       const pedido = Number(resposta.headers.get('retry-after'));
-      if (n < tentativas) await esperar(Number.isFinite(pedido) && pedido > 0 ? Math.min(pedido, 60) * 1000 : baseMs * 2 ** (n - 1));
+      if (resposta.status === 429 && Number.isFinite(pedido) && pedido > ESPERA_MAXIMA_S) {
+        const tempo = horasEMinutos(Math.ceil(pedido / 60));
+        const motivo = detalhe(corpo, chave).replace(/[.\s]+$/, '');
+        // Limite diário: dividir em horas não adianta, só esperar o dia virar.
+        const conselho = /per day|ASD/i.test(motivo)
+          ? `O limite do dia acabou; espere o tempo indicado e rode de novo (uns ${tempo}).`
+          : `Espere uns ${tempo}, o tempo que o Groq pediu, e rode de novo, ou divida a gravação e transcreva cada pedaço numa hora diferente.`;
+        throw new ErroDoComando(
+          `O limite de áudio do Groq foi atingido (429), provavelmente o do plano gratuito${motivo ? ` (${motivo})` : ''}. Não gravei nada. ${conselho}`,
+          6,
+        );
+      }
+      if (n < tentativas) await esperar(Number.isFinite(pedido) && pedido > 0 ? Math.min(pedido, ESPERA_MAXIMA_S) * 1000 : baseMs * 2 ** (n - 1));
       continue;
     }
     const d = detalhe(corpo, chave);
@@ -399,7 +435,10 @@ export async function transcrever(argv, { cwd = process.cwd(), env = process.env
       let descartados = 0;
       for (const [i, p] of partes.entries()) {
         if (partes.length > 1) dizer(`Enviando a parte ${i + 1} de ${partes.length}...`);
-        const segmentos = await enviarParte({ dados: readFileSync(p.arquivo), nome: basename(p.arquivo), chave, modelo: a.modelo, url, fetchImpl, esperar, baseMs });
+        const segmentos = await enviarParte({ dados: readFileSync(p.arquivo), nome: basename(p.arquivo), chave, modelo: a.modelo, url, fetchImpl, esperar, baseMs }).catch((e) => {
+          if (!(e instanceof ErroDoComando) || i === 0) throw e;
+          throw new ErroDoComando(`${e.message} ${avisoDeReenvio(i)}`, e.codigo);
+        });
         trechos.push(...paraTrechos(segmentos, p.inicio, () => descartados++));
       }
       if (descartados) {

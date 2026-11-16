@@ -9,7 +9,7 @@ allowed-tools: Read Bash(node:*)
 
 Você fala com um infoprodutor que não é programador: português simples, sem jargão, só os termos do glossário (aula, gravação, transcrição). Você nunca envia nada a ninguém.
 
-Este caminho é opcional: quem já tem o SRT da aula (CapCut, YouTube, plataforma do curso) não precisa dele, e usa `/aula-pronta:pos-gravacao`. O Groq cobra por minuto de áudio, na conta do infoprodutor.
+Este caminho é opcional: quem já tem o SRT da aula (CapCut, YouTube, plataforma do curso) não precisa dele, e usa `/aula-pronta:pos-gravacao`. No plano gratuito do Groq não há cobrança, dentro de um limite de horas de áudio; no plano pago, o Groq cobra por hora de áudio, na conta do infoprodutor.
 
 **A chave é segredo.** Nunca abra o `.env` com `Read` nem de outro jeito, nunca peça a chave no chat e nunca escreva o valor dela em lugar nenhum. Quem confere a chave é o script, que só diz se ela existe.
 
@@ -34,7 +34,7 @@ Com a pasta entre aspas simples. Sem `--transcrever`, o script só confere a cha
 
 ## Passo 2: o custo, antes de qualquer envio
 
-Diga ao infoprodutor, com as palavras do script, o **custo estimado** e que ele é cobrado pelo Groq. Se o script avisar que a gravação será enviada em várias partes, repita o aviso: uma falha no meio cobra de novo as partes já enviadas quando o infoprodutor rodar outra vez. Pergunte se pode transcrever e **espere o "sim"**. Sem "sim" claro, pare: nada foi enviado.
+Diga ao infoprodutor, com as palavras do script, o **custo estimado**: no plano gratuito do Groq não há cobrança (dentro dos limites que o script mostra); no plano pago, o valor é cobrado pelo Groq. Se o script avisar que a gravação passa do limite por hora do plano gratuito, repita o aviso: nesse plano o comando deve parar no meio. Se avisar que a gravação será enviada em várias partes, repita também: no plano pago, uma falha no meio cobra de novo as partes já enviadas quando o infoprodutor rodar outra vez. Pergunte se pode transcrever e **espere o "sim"**. Sem "sim" claro, pare: nada foi enviado.
 
 ## Passo 3: transcrever (só depois do "sim")
 
@@ -45,8 +45,8 @@ node '${CLAUDE_SKILL_DIR}/scripts/transcrever-groq.mjs' '<pasta da aula>' --tran
 O script mostra o custo de novo, corta a gravação em partes se ela passar do limite do Groq, repete sozinho uma falha temporária do serviço (até 3 vezes) e só grava a `transcricao.md` quando todas as partes deram certo. Se falhar, não deixa arquivo parcial.
 
 - **O Groq recusou a chave** (401): o infoprodutor confere a chave no `.env`. Não repita o comando.
-- **Outra falha** do script: conte o motivo em português. Falha temporária que esgotou as tentativas: sugira tentar de novo mais tarde.
-- Nunca rode o Passo 3 duas vezes seguidas para "tentar de novo" sem o infoprodutor pedir: cada rodada cobra.
+- **Outra falha** do script: conte o motivo em português. Falha temporária que esgotou as tentativas: sugira tentar de novo mais tarde. **Limite de áudio do Groq atingido** (429 com espera longa): repita quantos minutos o script mandou esperar e a opção de dividir a gravação. Não rode de novo antes disso.
+- Nunca rode o Passo 3 duas vezes seguidas para "tentar de novo" sem o infoprodutor pedir: cada rodada cobra (plano pago) ou gasta o limite (plano gratuito).
 
 ## Passo 4: relatório
 

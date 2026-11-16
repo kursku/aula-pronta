@@ -129,6 +129,34 @@ test('estimarCusto: turbo custa US$ 0,04 por hora e cobra no mínimo 10 s', () =
   assert.match(textoDoCusto(3600, 'whisper-large-v3-turbo'), /US\$ 0,04 .*13\/11\/2026/);
 });
 
+test('texto do custo abre pelo plano gratuito, com limites derivados das constantes, e depois o pago', () => {
+  const t = textoDoCusto(3600, 'whisper-large-v3-turbo');
+  const horas = (s) => `${s / 3600} h`;
+  assert.ok(t.startsWith('No plano gratuito do Groq (sem cartão): sem cobrança'));
+  assert.ok(t.includes(`até ${horas(modulo.LIMITE_GRATUITO_S_POR_HORA)} de áudio por hora e ${horas(modulo.LIMITE_GRATUITO_S_POR_DIA)} por dia`));
+  assert.equal(modulo.LIMITE_GRATUITO_S_POR_HORA, 7200);
+  assert.equal(modulo.LIMITE_GRATUITO_S_POR_DIA, 28800);
+  assert.match(t, /16\/11\/2026/);
+  assert.match(t, /No plano pago: custo estimado US\$ 0,04 .*cobrado na sua conta do Groq/);
+  assert.ok(t.indexOf('plano gratuito') < t.indexOf('US$'), 'o gratuito vem antes do valor em dólar');
+});
+
+test('gravação acima de 2 h avisa que passa do limite por hora do gratuito; 90 min não avisa', () => {
+  const acima = textoDoCusto(modulo.LIMITE_GRATUITO_S_POR_HORA + 60, 'whisper-large-v3-turbo');
+  assert.match(acima, /passa do limite por hora do plano gratuito \(2 h de áudio por hora\)/);
+  assert.match(acima, /o comando deve parar no meio/);
+  assert.doesNotMatch(acima, /limite de uma hora/);
+  assert.doesNotMatch(textoDoCusto(modulo.LIMITE_GRATUITO_S_POR_HORA, 'whisper-large-v3-turbo'), /passa do limite/);
+  assert.doesNotMatch(textoDoCusto(90 * 60, 'whisper-large-v3-turbo'), /passa do limite/);
+});
+
+test('avisos de partes não emendam dois parênteses', () => {
+  for (const m of [modulo.AVISO_PARTES_TALVEZ, modulo.avisoDePartes(3)]) {
+    assert.ok(!m.includes(') ('), m);
+    assert.match(m, /no gratuito, elas gastam o limite de novo; o aula-pronta não guarda o que já foi transcrito\)/);
+  }
+});
+
 test('texto do custo geral não afirma que cada parte é um envio', () => {
   assert.doesNotMatch(textoDoCusto(100, 'whisper-large-v3-turbo'), /cada parte é um envio/);
 });
@@ -182,6 +210,83 @@ test('429 e 5xx são repetidos e depois dá certo; Retry-After manda na espera',
   assert.deepEqual(t.esperas, [7000, 2000]);
 });
 
+test('429 pedindo mais de 60 s para na hora, com o tempo em minutos e sem repetir', async () => {
+  const t = par(() => resposta(429, 'limite', { 'retry-after': '1800' }));
+  await assert.rejects(t.chamar(), (e) => {
+    assert.match(e.message, /limite de áudio do Groq/);
+    assert.match(e.message, /plano gratuito/);
+    assert.match(e.message, /Não gravei nada/);
+    assert.match(e.message, /30 min/);
+    assert.match(e.message, /divida a gravação e transcreva cada pedaço numa hora diferente/);
+    return true;
+  });
+  assert.equal(t.chamadas.length, 1);
+  assert.deepEqual(t.esperas, []);
+});
+
+test('horasEMinutos formata 30, 60 e 90 min', () => {
+  assert.equal(modulo.horasEMinutos(30), '30 min');
+  assert.equal(modulo.horasEMinutos(60), '1 h');
+  assert.equal(modulo.horasEMinutos(90), '1 h 30 min');
+});
+
+test('429 do limite diário manda esperar o dia, sem o conselho de dividir por hora', async () => {
+  for (const msg of ['Rate limit reached on audio seconds per day: Limit 28800', 'Rate limit reached (ASD): Limit 28800']) {
+    const t = par(() => resposta(429, { error: { message: msg } }, { 'retry-after': '7200' }));
+    await assert.rejects(t.chamar(), (e) => {
+      assert.match(e.message, /O limite do dia acabou; espere o tempo indicado e rode de novo/);
+      assert.doesNotMatch(e.message, /numa hora diferente/);
+      return true;
+    });
+  }
+});
+
+test('429 longo sem motivo diário mantém o conselho por hora', async () => {
+  const t = par(() => resposta(429, { error: { message: 'Rate limit reached on audio seconds per hour (ASH)' } }, { 'retry-after': '1800' }));
+  await assert.rejects(t.chamar(), (e) => {
+    assert.match(e.message, /transcreva cada pedaço numa hora diferente/);
+    assert.doesNotMatch(e.message, /limite do dia/);
+    return true;
+  });
+});
+
+test('aviso de reenvio concorda no singular e no plural', () => {
+  assert.equal(
+    modulo.avisoDeReenvio(1),
+    'A parte 1 já foi enviada ao Groq e vai de novo se você rodar outra vez (no plano pago, é cobrada de novo; no gratuito, gasta o limite de novo).',
+  );
+  assert.equal(
+    modulo.avisoDeReenvio(3),
+    'As partes 1 a 3 já foram enviadas ao Groq e vão de novo se você rodar outra vez (no plano pago, são cobradas de novo; no gratuito, gastam o limite de novo).',
+  );
+});
+
+test('motivo do 429 que termina em ponto não gera ".)."', async () => {
+  const t = par(() => resposta(429, { error: { message: 'Rate limit reached. Please try again in 30m.' } }, { 'retry-after': '1800' }));
+  await assert.rejects(t.chamar(), (e) => {
+    assert.ok(!e.message.includes('.).'), e.message);
+    assert.match(e.message, /Please try again in 30m\)\. Não gravei nada/);
+    return true;
+  });
+});
+
+test('429 longo mostra a espera em horas e minutos e o motivo que o Groq deu, sem a chave', async () => {
+  const motivo = { error: { message: `Rate limit reached on audio seconds per day (ASD): Limit 28800, Used 28800 ${CHAVE}` } };
+  const t = par(() => resposta(429, motivo, { 'retry-after': '5400' }));
+  await assert.rejects(t.chamar(), (e) => {
+    assert.match(e.message, /1 h 30 min/);
+    assert.match(e.message, /audio seconds per day/);
+    assert.ok(!e.message.includes(CHAVE), 'a chave não aparece');
+    return true;
+  });
+});
+
+test('429 pedindo até 60 s continua sendo repetido', async () => {
+  const t = par((n) => (n === 1 ? resposta(429, 'devagar', { 'retry-after': '60' }) : resposta(200, segs('ok'))));
+  assert.equal((await t.chamar())[0].text, 'ok');
+  assert.deepEqual(t.esperas, [60000]);
+});
+
 test('falha de rede é repetida', async () => {
   const t = par((n) => {
     if (n === 1) throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } });
@@ -229,7 +334,7 @@ test('com chave: áudio curto vira transcrição no formato comum', async () => 
 test('o custo aparece antes da chamada ao serviço', async () => {
   const c = curso();
   const r = await rodar(c, ['--transcrever'], { fetchImpl: () => resposta(200, segs('ok')) });
-  const custo = r.eventos.findIndex((e) => e.startsWith('log:Custo estimado'));
+  const custo = r.eventos.findIndex((e) => e.startsWith('log:No plano gratuito'));
   const chamada = r.eventos.indexOf('fetch');
   assert.ok(custo >= 0 && chamada > custo, JSON.stringify(r.eventos));
 });
@@ -239,7 +344,7 @@ test('sem --transcrever só estima: nenhuma chamada e nenhum arquivo', async () 
   const antes = arquivosDe(c.raiz);
   const r = await rodar(c, [], { fetchImpl: () => assert.fail('não pode chamar o serviço') });
   assert.equal(r.codigo, 0);
-  assert.match(r.saida, /Custo estimado: US\$ 0,0001 \(5 s de áudio/);
+  assert.match(r.saida, /custo estimado US\$ 0,0001 \(5 s de áudio/);
   assert.match(r.saida, /Nada foi enviado ao Groq/);
   assert.deepEqual(arquivosDe(c.raiz), antes);
 });
@@ -452,7 +557,7 @@ test('linha de comando: estima sem chamar; com --transcrever grava; a chave vai 
     const c = curso();
     const a = await processo([c.aula, '--curso', c.raiz], { AULA_PRONTA_GROQ_URL: s.url }, c.raiz);
     assert.equal(a.codigo, 0, a.out);
-    assert.match(a.out, /Custo estimado/);
+    assert.match(a.out, /custo estimado/);
     assert.equal(s.pedidos.length, 0);
     assert.equal(existsSync(c.transcricao), false);
 
@@ -605,7 +710,7 @@ test('2.2: gravação grande avisa, junto do custo, que falha no meio cobra de n
   const saida = [];
   const codigo = await transcrever([grande.aula], { cwd: grande.raiz, env: { AULA_PRONTA_LIMITE_BYTES: '1000' }, log: (t) => saida.push(t), fetchImpl: () => assert.fail('não pode chamar') });
   assert.equal(codigo, 0);
-  assert.match(saida.join('\n'), /Custo estimado.*[\s\S]*várias partes[\s\S]*cobra de novo/);
+  assert.match(saida.join('\n'), /custo estimado.*[\s\S]*várias partes[\s\S]*cobra de novo/);
   assert.match(saida.join('\n'), /cada parte paga o mínimo de 10 s, então o valor real pode ser um pouco maior/);
 });
 
@@ -628,6 +733,24 @@ test('2.2: com mais de uma parte, o aviso sai de novo antes do primeiro envio', 
   });
   const aviso = eventos.findIndex((e) => /Vou enviar \d+ partes.*cobra de novo/.test(e));
   assert.ok(aviso >= 0 && aviso < eventos.indexOf('fetch'), JSON.stringify(eventos));
+});
+
+test('429 longo numa parte depois da primeira diz quantas partes já foram enviadas e que vão de novo', SEM_FFMPEG, async () => {
+  const c = curso({ segundos: 40, ruido: true });
+  const saida = [];
+  let n = 0;
+  const codigo = await transcrever([c.aula, '--transcrever'], {
+    cwd: c.raiz,
+    env: { AULA_PRONTA_LIMITE_BYTES: '300000' },
+    esperar: async () => {},
+    log: (t) => saida.push(t),
+    fetchImpl: async () => (++n === 1 ? resposta(200, segs('ok')) : resposta(429, 'limite', { 'retry-after': '1800' })),
+  });
+  assert.equal(codigo, 6);
+  const texto = saida.join('\n');
+  assert.match(texto, /limite de áudio do Groq/);
+  assert.match(texto, /A parte 1 já foi enviada ao Groq e vai de novo se você rodar outra vez/);
+  assert.ok(!existsSync(join(c.aula, 'transcricao.md')));
 });
 
 // ---------- rodada 3 (review Sonnet) ----------

@@ -1,5 +1,9 @@
 # aula-pronta
 
+<p align="center">
+  <img src="assets/hero.svg" width="100%" alt="A legenda gravacao.srt da aula 01 do curso de exemplo vira quatro entregas: material.md (que vira página e PDF com a marca do curso), descricao.md, o e-mail do lote em lotes/lote-01-02.1.md e a wiki do curso em wiki/conceitos/. O plugin nunca envia e-mail nem mensagem.">
+</p>
+
 Você grava a aula; o aula-pronta escreve o material do aluno, a descrição, o e-mail do lote e a wiki do seu curso.
 
 ```
@@ -103,6 +107,8 @@ Para quem só tem o áudio ou o vídeo da aula. Salve a gravação (`gravacao.mp
 2. Na pasta do curso, crie o arquivo `.env` com uma linha só: `GROQ_API_KEY=cole-a-chave-aqui`.
 3. Rode o comando.
 
+O plano gratuito do Groq não pede cartão e transcreve até 2 horas de áudio por hora e 8 horas por dia. Se passar disso, o Groq recusa (429) e o comando para, sem gravar nada: ele não fica esperando o limite liberar. Rode de novo depois do tempo que a mensagem disser, ou divida a gravação e transcreva cada pedaço numa hora diferente. Só existe cobrança se você cadastrar um cartão e mudar para o plano pago (Developer). Limites conferidos em 16/11/2026 na [página de limites do Groq](https://console.groq.com/docs/rate-limits); confira se mudaram.
+
 Sem chave, o comando explica como configurar e para, sem criar arquivo. Se a `transcricao.md` já existe, ela não é sobrescrita. Depois, o `pos-gravacao` lê essa transcrição como qualquer outra.
 
 ### wiki-do-curso
@@ -166,7 +172,7 @@ Pelo terminal, sem abrir o Claude Code (2.1.292 ou mais novo): `claude plugin in
 | [Pandoc](https://pandoc.org) | Gera a página web e o PDF do material do aluno. Se faltar, o plugin pergunta antes de instalar | Só para `pagina-pdf` (página web e PDF) |
 | Google Chrome ou Microsoft Edge | Imprime o PDF | Só para o PDF |
 | [ffmpeg](https://ffmpeg.org) | Corta gravações grandes antes de enviar ao Groq | Só para `transcrever`, quando a gravação não é WAV ou é grande (ele mede a duração e corta em partes) |
-| Conta no [Groq](https://groq.com) | Transcreve a gravação quando você não tem o SRT. Cobra por minuto de áudio, na sua conta | Não |
+| Conta no [Groq](https://groq.com) | Transcreve a gravação quando você não tem o SRT. O plano gratuito tem limite de horas de áudio; o pago cobra por hora de áudio, na sua conta | Não |
 
 Você também precisa de uma **legenda (SRT)** de cada aula. Sem SRT, use o `transcrever`.
 
@@ -184,7 +190,7 @@ O que está plantado em cada aula (a fala errada da aula 1, o dado sensível fic
 ## Privacidade e custo
 
 - **O plugin nunca envia e-mail nem mensagem a ninguém:** só escreve arquivos na pasta do curso. Quem copia o e-mail do lote e envia é você.
-- **O único serviço de fora é o Groq**, e só no `transcrever`, com a **sua** chave. O comando mostra o custo estimado e espera o seu "sim" antes de enviar qualquer coisa. Valor de referência: US$ 0,04 por hora de áudio (conferido em 13/11/2026; confira se mudou). A chave nunca aparece na tela nem em arquivo gerado.
+- **O único serviço de fora é o Groq**, e só no `transcrever`, com a **sua** chave. O comando mostra o custo estimado e espera o seu "sim" antes de enviar qualquer coisa. No plano gratuito do Groq a transcrição não custa nada, até 2 horas de áudio por hora e 8 horas por dia (conferido em 16/11/2026); acima disso, o comando para sem gravar nada. No plano pago, a referência é US$ 0,04 por hora de áudio (conferido em 13/11/2026; confira se mudou). A chave nunca aparece na tela nem em arquivo gerado.
 - **A transcrição guarda tudo o que foi dito, inclusive dado sensível.** A `transcricao.md`, o `gravacao.srt` de onde ela vem e a pasta `wiki/raw/` são cópia fiel da gravação: não compartilhe nem publique esses arquivos. O `iniciar` já os deixa fora do Git. O material do aluno e os relatórios nunca repetem o dado sensível.
 
 ## Mais detalhe
