@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { constants as fsConstants, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { constants as fsConstants, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -845,18 +845,372 @@ test('duas gerações da mesma aula não usam a mesma trava', () => {
   }
 });
 
+test('trava com PID vivo e mais de 150 segundos continua ocupada', () => {
+  const { aula } = criarCurso();
+  const agora = 1_800_000_000_000;
+  const trava = join(aula, '.aula-pronta.lock');
+  mkdirSync(trava);
+  writeFileSync(join(trava, 'estado.json'), JSON.stringify({ pid: 42, criadoEm: agora - 150_001 }));
+
+  assert.throws(
+    () => adquirirTrava(aula, { agora: () => agora, processoVivo: () => true }),
+    /outra geração/,
+  );
+  assert.equal(JSON.parse(readFileSync(join(trava, 'estado.json'), 'utf8')).pid, 42);
+});
+
+test('trava com PID vivo fica disponível após 30 minutos', () => {
+  const { aula } = criarCurso();
+  const agora = 1_800_000_000_000;
+  const trava = join(aula, '.aula-pronta.lock');
+  mkdirSync(trava);
+  writeFileSync(join(trava, 'estado.json'), JSON.stringify({ pid: 42, criadoEm: agora - 1_800_001 }));
+
+  const liberar = adquirirTrava(aula, { agora: () => agora, processoVivo: () => true });
+  const novoDono = JSON.parse(readFileSync(join(trava, 'estado.json'), 'utf8'));
+  assert.equal(novoDono.pid, process.pid);
+  assert.equal(novoDono.criadoEm, agora);
+  assert.equal(typeof novoDono.token, 'string');
+  liberar();
+  assert.equal(existsSync(trava), false);
+});
+
+test('trava de PID morto só fica disponível depois de 150 segundos', () => {
+  const agora = Date.now();
+  const { aula: aulaRecente } = criarCurso();
+  const travaRecente = join(aulaRecente, '.aula-pronta.lock');
+  mkdirSync(travaRecente);
+  writeFileSync(join(travaRecente, 'estado.json'), JSON.stringify({ pid: 42, criadoEm: agora - 149_999 }));
+
+  assert.throws(
+    () => adquirirTrava(aulaRecente, { agora: () => agora, processoVivo: () => false }),
+    /outra geração/,
+  );
+  const { aula: aulaAntiga } = criarCurso();
+  const travaAntiga = join(aulaAntiga, '.aula-pronta.lock');
+  mkdirSync(travaAntiga);
+  writeFileSync(join(travaAntiga, 'estado.json'), JSON.stringify({ pid: 42, criadoEm: agora - 150_000 }));
+
+  const liberar = adquirirTrava(aulaAntiga, { agora: () => agora, processoVivo: () => false });
+  liberar();
+  assert.equal(existsSync(travaAntiga), false);
+});
+
+test('pid fora da faixa com ERR_OUT_OF_RANGE retoma depois de 150 segundos', () => {
+  const agora = Date.now();
+  const { aula } = criarCurso();
+  const trava = join(aula, '.aula-pronta.lock');
+  mkdirSync(trava);
+  writeFileSync(join(trava, 'estado.json'), JSON.stringify({ pid: 2_147_483_648, criadoEm: agora - 150_001 }));
+  const killOriginal = process.kill;
+  process.kill = (pid, sinal) => {
+    assert.equal(pid, 2_147_483_648);
+    assert.equal(sinal, 0);
+    throw Object.assign(new Error('pid fora da faixa'), { code: 'ERR_OUT_OF_RANGE' });
+  };
+  try {
+    const liberar = adquirirTrava(aula, { agora: () => agora });
+    liberar();
+    assert.equal(existsSync(trava), false);
+  } finally {
+    process.kill = killOriginal;
+  }
+});
+
+test('erro desconhecido ao verificar PID conta como vivo', () => {
+  const agora = Date.now();
+  const { aula } = criarCurso();
+  const trava = join(aula, '.aula-pronta.lock');
+  mkdirSync(trava);
+  writeFileSync(join(trava, 'estado.json'), JSON.stringify({ pid: 42, criadoEm: agora - 150_001 }));
+  const killOriginal = process.kill;
+  let liberar;
+  process.kill = () => { throw Object.assign(new Error('falha temporária'), { code: 'EIO' }); };
+  try {
+    assert.throws(() => { liberar = adquirirTrava(aula, { agora: () => agora }); }, /outra geração/);
+  } finally {
+    process.kill = killOriginal;
+    liberar?.();
+  }
+  assert.equal(JSON.parse(readFileSync(join(trava, 'estado.json'), 'utf8')).pid, 42);
+});
+
+test('execução não remove trava quando outro processo assume propriedade', () => {
+  const { aula } = criarCurso();
+  const trava = join(aula, '.aula-pronta.lock');
+  const dono = { pid: process.pid, criadoEm: 1_800_000_000_000 };
+  const liberar = adquirirTrava(aula, { agora: () => dono.criadoEm });
+  const novoDono = { pid: process.pid + 1, criadoEm: dono.criadoEm + 1 };
+  writeFileSync(join(trava, 'estado.json'), JSON.stringify(novoDono));
+
+  liberar();
+
+  assert.deepEqual(JSON.parse(readFileSync(join(trava, 'estado.json'), 'utf8')), novoDono);
+});
+
+test('retomada concorrente não toma trava criada por outra execução', () => {
+  const { aula } = criarCurso();
+  const trava = join(aula, '.aula-pronta.lock');
+  const agora = Date.now();
+  mkdirSync(trava);
+  writeFileSync(join(trava, 'estado.json'), JSON.stringify({ pid: 2147483647, criadoEm: agora - 150_001 }));
+  let retomouB = false;
+  let liberarB;
+  const renomearC = (origem, destino) => {
+    renameSync(origem, destino);
+    if (!retomouB) {
+      retomouB = true;
+      liberarB = adquirirTrava(aula, { agora: () => agora, processoVivo: () => false });
+    }
+  };
+
+  try {
+    assert.throws(
+      () => adquirirTrava(aula, { agora: () => agora, processoVivo: () => false, renomear: renomearC }),
+      /outra geração/,
+    );
+    const donoB = JSON.parse(readFileSync(join(trava, 'estado.json'), 'utf8'));
+    assert.equal(donoB.pid, process.pid);
+    assert.equal(donoB.criadoEm, agora);
+    assert.equal(typeof donoB.token, 'string');
+  } finally {
+    liberarB?.();
+  }
+});
+
+test('retomada concorrente apaga morta se trava atual já existe', () => {
+  const { aula } = criarCurso();
+  const trava = join(aula, '.aula-pronta.lock');
+  const agora = Date.now();
+  mkdirSync(trava);
+  writeFileSync(join(trava, 'estado.json'), JSON.stringify({ pid: 2147483647, criadoEm: agora - 150_001 }));
+  let morta;
+  let liberarB;
+  const renomear = (origem, destino) => {
+    renameSync(origem, destino);
+    morta = destino;
+    writeFileSync(join(morta, 'estado.json'), JSON.stringify({ pid: 2147483646, criadoEm: agora - 150_001 }));
+    liberarB = adquirirTrava(aula, { agora: () => agora, processoVivo: () => false });
+  };
+
+  try {
+    assert.throws(
+      () => adquirirTrava(aula, { agora: () => agora, processoVivo: () => false, renomear }),
+      /outra geração/,
+    );
+    assert.equal(existsSync(morta), false);
+    assert.equal(JSON.parse(readFileSync(join(trava, 'estado.json'), 'utf8')).pid, process.pid);
+  } finally {
+    liberarB?.();
+  }
+});
+
+test('erro ao apagar morta não substitui falha de trava ocupada', () => {
+  const { aula } = criarCurso();
+  const trava = join(aula, '.aula-pronta.lock');
+  const agora = Date.now();
+  mkdirSync(trava);
+  writeFileSync(join(trava, 'estado.json'), JSON.stringify({ pid: 2147483647, criadoEm: agora - 150_001 }));
+  let morta;
+  let removerChamado = false;
+  let liberarB;
+  const renomear = (origem, destino) => {
+    renameSync(origem, destino);
+    morta = destino;
+    writeFileSync(join(morta, 'estado.json'), JSON.stringify({ pid: 2147483646, criadoEm: agora - 150_001 }));
+    liberarB = adquirirTrava(aula, { agora: () => agora, processoVivo: () => false });
+  };
+
+  try {
+    assert.throws(
+      () => adquirirTrava(aula, {
+        agora: () => agora,
+        processoVivo: () => false,
+        renomear,
+        remover: () => {
+          removerChamado = true;
+          throw Object.assign(new Error('ocupada'), { code: 'EBUSY' });
+        },
+      }),
+      (erro) => {
+        assert.equal(erro.codigo, 2);
+        assert.match(erro.message, /outra geração/);
+        return true;
+      },
+    );
+    assert.equal(removerChamado, true);
+    assert.equal(existsSync(morta), true);
+    assert.equal(JSON.parse(readFileSync(join(trava, 'estado.json'), 'utf8')).pid, process.pid);
+  } finally {
+    liberarB?.();
+  }
+});
+
+test('falha ao gravar estado remove a pasta da trava e explica a falha', () => {
+  const { aula } = criarCurso();
+  const trava = join(aula, '.aula-pronta.lock');
+  assert.throws(
+    () => adquirirTrava(aula, { gravarEstado: () => { throw Object.assign(new Error('disco cheio'), { code: 'ENOSPC' }); } }),
+    /Não consegui criar a trava da geração \(ENOSPC\)/,
+  );
+  assert.equal(existsSync(trava), false);
+});
+
+test('liberarTrava avisa e preserva pasta sem estado', () => {
+  const trava = join(mkdtempSync(join(tmpdir(), 'ap-lock-')), '.aula-pronta.lock');
+  mkdirSync(trava);
+  const mensagens = [];
+  const original = console.error;
+  console.error = (mensagem) => mensagens.push(mensagem);
+  try {
+    liberarTrava(trava, { pid: process.pid, criadoEm: 1 });
+  } finally {
+    console.error = original;
+  }
+  assert.equal(existsSync(trava), true);
+  assert.match(mensagens[0], /ENOENT/);
+});
+
+test('liberarTrava avisa e preserva estado corrompido', () => {
+  const trava = join(mkdtempSync(join(tmpdir(), 'ap-lock-')), '.aula-pronta.lock');
+  mkdirSync(trava);
+  writeFileSync(join(trava, 'estado.json'), '{');
+  const mensagens = [];
+  const original = console.error;
+  console.error = (mensagem) => mensagens.push(mensagem);
+  try {
+    liberarTrava(trava, { pid: process.pid, criadoEm: 1 });
+  } finally {
+    console.error = original;
+  }
+  assert.equal(existsSync(trava), true);
+  assert.match(mensagens[0], /JSON|Unexpected|position/i);
+});
+
+test('liberarTrava fica calada quando a pasta já não existe', () => {
+  const trava = join(mkdtempSync(join(tmpdir(), 'ap-lock-')), '.aula-pronta.lock');
+  const mensagens = [];
+  const original = console.error;
+  console.error = (mensagem) => mensagens.push(mensagem);
+  try {
+    liberarTrava(trava, { pid: process.pid, criadoEm: 1 });
+  } finally {
+    console.error = original;
+  }
+  assert.deepEqual(mensagens, []);
+});
+
+test('liberarTrava com dono indefinido preserva trava sem avisar', () => {
+  const { aula } = criarCurso();
+  const trava = join(aula, '.aula-pronta.lock');
+  const liberar = adquirirTrava(aula);
+  const mensagens = [];
+  const original = console.error;
+  console.error = (mensagem) => mensagens.push(mensagem);
+  try {
+    liberarTrava(trava, undefined);
+  } finally {
+    console.error = original;
+    liberar();
+  }
+  assert.deepEqual(mensagens, []);
+  assert.equal(existsSync(trava), false);
+});
+
+test('falha ao gerar token não deixa pasta de trava vazia', () => {
+  const { aula } = criarCurso();
+  const trava = join(aula, '.aula-pronta.lock');
+  let liberar;
+  try {
+    assert.throws(
+      () => { liberar = adquirirTrava(aula, { criarToken: () => { throw new Error('randomUUID falhou'); } }); },
+      /randomUUID falhou/,
+    );
+    assert.equal(existsSync(trava), false);
+  } finally {
+    liberar?.();
+  }
+});
+
+test('trava ocupada informa PID, idade, tempo para expirar e pasta', () => {
+  const { aula } = criarCurso();
+  const trava = join(aula, '.aula-pronta.lock');
+  const agora = Date.now();
+  mkdirSync(trava);
+  writeFileSync(join(trava, 'estado.json'), JSON.stringify({ pid: process.pid, criadoEm: agora - 5 * 60_000 }));
+  assert.throws(() => adquirirTrava(aula, { agora: () => agora }), (erro) => {
+    assert.match(erro.message, new RegExp(`PID ${process.pid}`));
+    assert.match(erro.message, /há 5 min/);
+    assert.match(erro.message, /em até 25 min/);
+    assert.ok(erro.message.includes(trava));
+    return true;
+  });
+});
+
+test('trava viva do PID atual com 300 segundos usa verificação padrão', () => {
+  const { aula } = criarCurso();
+  const trava = join(aula, '.aula-pronta.lock');
+  const agora = Date.now();
+  mkdirSync(trava);
+  writeFileSync(join(trava, 'estado.json'), JSON.stringify({ pid: process.pid, criadoEm: agora - 300_000 }));
+  assert.throws(() => adquirirTrava(aula, { agora: () => agora }), /outra geração/);
+});
+
+test('trava viva sem criadoEm usa mtime da pasta e não é retomada', () => {
+  const { aula } = criarCurso();
+  const trava = join(aula, '.aula-pronta.lock');
+  mkdirSync(trava);
+  writeFileSync(join(trava, 'estado.json'), JSON.stringify({ pid: process.pid }));
+  assert.throws(() => adquirirTrava(aula), /outra geração/);
+});
+
+test('mesmo PID com criadoEm diferente não prova propriedade da trava', () => {
+  const { aula } = criarCurso();
+  const trava = join(aula, '.aula-pronta.lock');
+  const dono = { pid: process.pid, criadoEm: 1_800_000_000_000 };
+  const liberar = adquirirTrava(aula, { agora: () => dono.criadoEm });
+  const novoDono = { pid: dono.pid, criadoEm: dono.criadoEm + 1 };
+  writeFileSync(join(trava, 'estado.json'), JSON.stringify(novoDono));
+
+  liberar();
+
+  assert.deepEqual(JSON.parse(readFileSync(join(trava, 'estado.json'), 'utf8')), novoDono);
+});
+
+test('token separa donos com mesmo PID e criadoEm', () => {
+  const { aula } = criarCurso();
+  const trava = join(aula, '.aula-pronta.lock');
+  const criadoEm = 1_800_000_000_000;
+  const pid = 42;
+  const liberarA = adquirirTrava(aula, { agora: () => criadoEm, processoVivo: () => false, pid });
+  const donoA = JSON.parse(readFileSync(join(trava, 'estado.json'), 'utf8'));
+  const relogiosB = [criadoEm + 150_001, criadoEm, criadoEm];
+  const liberarB = adquirirTrava(aula, { agora: () => relogiosB.shift() ?? criadoEm, processoVivo: () => false, pid });
+  const donoB = JSON.parse(readFileSync(join(trava, 'estado.json'), 'utf8'));
+
+  assert.equal(donoB.pid, donoA.pid);
+  assert.equal(donoB.criadoEm, donoA.criadoEm);
+  assert.notEqual(donoB.token, donoA.token);
+
+  liberarA();
+
+  assert.deepEqual(JSON.parse(readFileSync(join(trava, 'estado.json'), 'utf8')), donoB);
+  liberarB();
+  assert.equal(existsSync(trava), false);
+});
+
 test('gerar recupera trava com processo morto', SEM_PANDOC, () => {
   const { aula } = criarCurso();
   const trava = join(aula, '.aula-pronta.lock');
   mkdirSync(trava);
-  writeFileSync(join(trava, 'estado.json'), JSON.stringify({ pid: 2147483647, criadoEm: Date.now() }));
+  writeFileSync(join(trava, 'estado.json'), JSON.stringify({ pid: 2147483647, criadoEm: Date.now() - 150_001 }));
   gerar(aula, { soPagina: true });
   assert.equal(existsSync(trava), false);
   assert.ok(existsSync(join(aula, 'material.html')));
 });
 
-test('gerar recupera trava sem hora, futura ou velha mesmo com PID vivo', SEM_PANDOC, () => {
-  for (const estado of [{ pid: process.pid }, { pid: process.pid, criadoEm: Date.now() + 1_000_000 }, { pid: process.pid, criadoEm: Date.now() - 300_000 }]) {
+test('gerar recupera trava com hora futura ou velha mesmo com PID vivo', SEM_PANDOC, () => {
+  for (const estado of [{ pid: process.pid, criadoEm: Date.now() + 1_000_000 }, { pid: process.pid, criadoEm: Date.now() - 1_800_001 }]) {
     const { aula } = criarCurso();
     const trava = join(aula, '.aula-pronta.lock');
     mkdirSync(trava);
@@ -870,7 +1224,7 @@ test('trava abandonada: rename que perde corrida vira outra geração', () => {
   const { aula } = criarCurso();
   const trava = join(aula, '.aula-pronta.lock');
   mkdirSync(trava);
-  writeFileSync(join(trava, 'estado.json'), JSON.stringify({ pid: 2147483647, criadoEm: Date.now() }));
+  writeFileSync(join(trava, 'estado.json'), JSON.stringify({ pid: 2147483647, criadoEm: Date.now() - 150_001 }));
   let chamado = false;
   assert.throws(
     () => adquirirTrava(aula, { renomear: () => {
@@ -891,11 +1245,13 @@ test('gerar sempre libera trava quando execução falha', SEM_PANDOC, () => {
 test('liberarTrava avisa quando não consegue remover a trava', () => {
   const trava = join(mkdtempSync(join(tmpdir(), 'ap-lock-')), '.aula-pronta.lock');
   mkdirSync(trava);
+  const dono = { pid: process.pid, criadoEm: 1 };
+  writeFileSync(join(trava, 'estado.json'), JSON.stringify(dono));
   const mensagens = [];
   const original = console.error;
   console.error = (mensagem) => mensagens.push(mensagem);
   try {
-    liberarTrava(trava, () => { throw Object.assign(new Error('busy'), { code: 'EBUSY' }); });
+    liberarTrava(trava, dono, () => { throw Object.assign(new Error('busy'), { code: 'EBUSY' }); });
   } finally {
     console.error = original;
   }

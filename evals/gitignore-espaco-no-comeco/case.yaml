@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: gitignore-espaco-no-comeco
+context:
+  scaffold_script: preparar-pasta.sh

@@ -67,6 +67,68 @@ test('o índice sai ao fim de cada bloco, não só no fim', () => {
   assert.match(passo2, /`\.\.\. indice`, ainda dentro do bloco/);
 });
 
+test('cada bloco roda os comandos do script em ordem, e só está pronto com a saída do script', () => {
+  const passo2 = skill.slice(skill.indexOf('## Passo 2'), skill.indexOf('## Passo 3'));
+  assert.match(passo2, /roda o script com `Bash`/);
+  assert.match(passo2, /Cada comando do script vai numa chamada de `Bash` só dele[^\n]*nunca no mesmo comando que escreve páginas/);
+  // Itens numerados 1 a 6, crescentes, cada comando do script no seu item.
+  // Cada item vai do número até o próximo item numerado ou a linha em branco; quebra de linha no meio do item não o parte.
+  const itens = passo2.split(/\n(?=\d\. )/).filter((p) => /^\d\. /.test(p))
+    .map((p) => p.split(/\n\s*\n/)[0].replace(/\n/g, ' '));
+  assert.deepEqual(itens.map((p) => Number(p.match(/^(\d+)\. /)[1])), [1, 2, 3, 4, 5, 6]);
+  const corpo = (n) => itens[n - 1].replace(/^\d+\. /, '');
+  const comando = { 1: 'copiar', 3: 'limpar-conceitos', 4: 'registrar', 5: 'indice', 6: 'conferir' };
+  for (const [n, nome] of Object.entries(comando)) {
+    // O nome do comando termina em espaço ou crase: \`... copiar\` não aceita "copiar-extra".
+    assert.match(corpo(n), new RegExp('^`\\.\\.\\. ' + nome + '[ `]'), `o item ${n} começa com o comando ${nome}`);
+  }
+  // O item 2 é o passo de escrever as páginas e não roda nenhum comando do script.
+  assert.match(corpo(2), /^Para cada aula do bloco, leia `wiki\/raw\/<aula>\/transcricao\.md` \*\*inteira\*\*/);
+  assert.match(corpo(2), /escreva `wiki\/aulas\/<aula>\.md`/);
+  assert.doesNotMatch(corpo(2), /`\.\.\. [a-z-]+|wiki\.mjs/);
+  const item6 = corpo(6);
+  assert.match(item6, /^`\.\.\. conferir`, rodado depois do `indice` deste bloco/);
+  // Três grupos, cada tipo no seu: tratar e conferir de novo, parar a ingestão, não travar o bloco.
+  assert.match(item6, /páginas que este bloco escreveu ou mexeu \(aulas e conceitos\)/);
+  const grupo = (rotulo, proximo) => {
+    const ini = item6.indexOf(rotulo);
+    assert.ok(ini >= 0, `o item 6 tem o grupo ${rotulo}`);
+    return item6.slice(ini, proximo ? item6.indexOf(proximo) : undefined);
+  };
+  const trata = grupo('**Trate e confira de novo:**', '**Pare a ingestão:**');
+  const para = grupo('**Pare a ingestão:**', '**Não travam o bloco:**');
+  const naoTrava = grupo('**Não travam o bloco:**');
+  // Os 11 tipos do conferir que o item 6 cita, cada um em um grupo só; o aula-sem-registro é a exceção (dois grupos).
+  const esperado = {
+    trata: ['aula-sem-registro', 'link-quebrado', 'pagina-desatualizada', 'substituicao-interrompida'],
+    para: ['copia-alterada', 'copia-ausente', 'pagina-ausente', 'registro-malformado'],
+    naoTrava: ['aula-removida', 'aula-sem-registro', 'aula-sem-transcricao', 'pagina-orfa'],
+  };
+  const todos = new Set(Object.values(esperado).flat());
+  assert.equal(todos.size, 11);
+  const tipos = (texto) => [...new Set([...texto.matchAll(/`([a-z-]+)`/g)].map((m) => m[1]).filter((t) => todos.has(t)))].sort();
+  const achado = { trata: tipos(trata), para: tipos(para), naoTrava: tipos(naoTrava) };
+  assert.deepEqual(achado, esperado);
+  for (const tipo of todos) {
+    const grupos = Object.values(achado).filter((g) => g.includes(tipo)).length;
+    assert.equal(grupos, tipo === 'aula-sem-registro' ? 2 : 1, `${tipo} está em ${tipo === 'aula-sem-registro' ? 'dois grupos' : 'um grupo só'}`);
+  }
+  // O aula-sem-registro tem o qualificador certo em cada grupo.
+  assert.match(trata, /`aula-sem-registro` de aula deste bloco/);
+  assert.match(naoTrava, /`aula-sem-registro` de aula de um bloco seguinte/);
+  assert.match(trata, /`indice` e só então `conferir` de novo/);
+  assert.match(para, /não faça laço, não comece o bloco seguinte e vá ao relatório do Passo 4/);
+  // A frase do "Bloco pronto" é afirmativa ("só quando") e traz as três saídas, em ordem, na mesma frase.
+  const pronto = passo2.slice(passo2.indexOf('**Bloco pronto**'), passo2.indexOf('Só então comece o bloco seguinte'));
+  const frase = pronto.split(/(?<=\.) /)[0];
+  assert.match(frase, /^\*\*Bloco pronto\*\* é só quando as três saídas do script existem, nesta ordem:/);
+  assert.match(frase, /`registrar` listou todas as aulas do bloco em `registradas` \(ou em `jaRegistradas`, numa retomada\), depois o `indice` rodou, e um `conferir` rodado depois desse `indice`/);
+  assert.match(frase, /não trouxe, nas páginas que este bloco escreveu ou mexeu \(aulas e conceitos\), problema que peça tratamento ou pare a ingestão\.$/);
+  assert.doesNotMatch(frase, /\bnão\b.*\bnão\b/);
+  assert.match(pronto, /A saída do bloco anterior não vale/);
+  assert.match(pronto, /Sem as três saídas o bloco não está pronto: não comece o seguinte nem escreva o relatório\./);
+});
+
 test('aula-sem-registro manda ingerir de novo e aula-removida nunca apaga', () => {
   assert.match(skill, /`aula-sem-registro`: a ingestão dessa aula foi interrompida\. \*\*Não corrija páginas\*\*/);
   assert.match(skill, /`aula-removida`[^\n]*nunca apague nada/);

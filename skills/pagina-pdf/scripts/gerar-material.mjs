@@ -5,6 +5,7 @@
 // O pandoc faz a página com o modelo do plugin; o Chrome ou o Edge sem janela imprime o PDF.
 // Sem dependências. Exit: 0 ok, 2 uso ou arquivo, 5 sem pandoc, 6 sem navegador, 7 navegador falhou.
 import { constants, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -20,6 +21,7 @@ export const SEM = ['raw_html', 'raw_tex', 'raw_attribute', 'tex_math_dollars', 
 export const entradaPandoc = (sem = SEM) => `markdown${sem.map((e) => `-${e}`).join('')}`;
 const TEMPO_PDF_MS = 120_000;
 const TEMPO_TRAVA_MS = TEMPO_PDF_MS + 30_000;
+const TEMPO_TRAVA_VIVA_MS = 30 * 60_000;
 const NOME_TRAVA = '.aula-pronta.lock';
 const NOME_ESTADO_TRAVA = 'estado.json';
 const TEMPO_INSTALACAO_MS = 600_000;
@@ -111,15 +113,72 @@ const caminhoFora = (raiz, alvo) => {
   return rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel);
 };
 
-export function adquirirTrava(aula, { renomear = renameSync } = {}) {
+function processoVivo(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return !['ESRCH', 'EINVAL', 'ERR_OUT_OF_RANGE'].includes(e.code);
+  }
+}
+
+function lerEstadoTrava(trava) {
+  try {
+    const estado = JSON.parse(readFileSync(join(trava, NOME_ESTADO_TRAVA), 'utf8'));
+    return { pid: estado?.pid, criadoEm: estado?.criadoEm, token: estado?.token };
+  } catch {
+    return null;
+  }
+}
+
+function mensagemTravaOcupada(trava, julgamento) {
+  const pid = Number.isInteger(julgamento.estado?.pid) && julgamento.estado.pid > 0 ? julgamento.estado.pid : 'desconhecido';
+  const idade = Number.isFinite(julgamento.idade) ? Math.max(0, Math.floor(julgamento.idade / 60_000)) : 0;
+  const restante = Number.isFinite(julgamento.limite - julgamento.idade) ? Math.max(1, Math.ceil((julgamento.limite - julgamento.idade) / 60_000)) : 1;
+  return `Já existe outra geração desta aula em andamento (PID ${pid}). A trava foi criada há ${idade} min e expira sozinha em até ${restante} min. Se você fechou a execução e tem certeza, apague a pasta ${trava}.`;
+}
+
+function mesmaTrava(a, b) {
+  if (a === null) return b === null;
+  if (b === null) return false;
+  if (a.token !== undefined || b.token !== undefined) return a.token !== undefined && a.token === b.token;
+  return a.pid === b.pid && a.criadoEm === b.criadoEm;
+}
+
+export function adquirirTrava(aula, { renomear = renameSync, agora = Date.now, processoVivo: verificarPid = processoVivo, pid = process.pid, gravarEstado = writeFileSync, criarToken = randomUUID, remover = rmSync } = {}) {
   const trava = join(aula, NOME_TRAVA);
+  const token = criarToken();
   try {
     mkdirSync(trava);
   } catch (e) {
-    if (e.code === 'EEXIST' && travaAbandonada(trava)) {
-      const morta = `${trava}.${process.pid}.${Date.now()}.morta`;
+    if (e.code === 'EEXIST') {
+      const opcoes = { agora, processoVivo: verificarPid };
+      const julgamento = travaAbandonada(trava, opcoes);
+      if (!julgamento.abandonada) throw new Falha(2, mensagemTravaOcupada(trava, julgamento));
+      const morta = `${trava}.${pid}.${agora()}.morta`;
       try {
         renomear(trava, morta);
+      } catch (recuperacao) {
+        const atual = travaAbandonada(trava, opcoes);
+        throw new Falha(2, `${mensagemTravaOcupada(trava, atual)} (${recuperacao.code ?? recuperacao.message}).`);
+      }
+      if (!mesmaTrava(julgamento.estado, lerEstadoTrava(morta))) {
+        if (!existsSync(trava)) {
+          try {
+            renomear(morta, trava);
+          } catch {
+            // Preserve a trava movida se outra execução ocupou o caminho.
+          }
+        } else {
+          try {
+            remover(morta, { recursive: true, force: true });
+          } catch {
+            // Best-effort: preserve the current lock and report it as occupied.
+          }
+        }
+        throw new Falha(2, mensagemTravaOcupada(trava, travaAbandonada(trava, opcoes)));
+      }
+      try {
         mkdirSync(trava);
         rmSync(morta, { recursive: true, force: true });
       } catch (recuperacao) {
@@ -128,51 +187,48 @@ export function adquirirTrava(aula, { renomear = renameSync } = {}) {
         } catch {
           // Outra geração pode ter tomado a trava; não apague o caminho original.
         }
-        throw new Falha(2, `Já existe outra geração desta aula: ${trava}. Espere ela terminar ou remova a trava somente se tiver certeza de que processo morreu (${recuperacao.code ?? recuperacao.message}).`);
+        throw new Falha(2, `${mensagemTravaOcupada(trava, travaAbandonada(trava, opcoes))} (${recuperacao.code ?? recuperacao.message}).`);
       }
-    } else if (e.code === 'EEXIST') {
-      throw new Falha(2, `Já existe outra geração desta aula: ${trava}. Espere ela terminar ou remova a trava somente se tiver certeza de que processo morreu.`);
     }
     if (e.code !== 'EEXIST') throw new Falha(2, `Não consegui criar a trava da geração (${e.code ?? e.message}).`);
   }
+  const dono = { pid, criadoEm: agora(), token };
   try {
-    writeFileSync(join(trava, NOME_ESTADO_TRAVA), JSON.stringify({ pid: process.pid, criadoEm: Date.now() }));
+    gravarEstado(join(trava, NOME_ESTADO_TRAVA), JSON.stringify(dono));
   } catch (e) {
-    liberarTrava(trava);
+    try {
+      rmSync(trava, { recursive: true, force: true });
+    } catch {
+      // The lock directory was created by this acquisition.
+    }
     throw new Falha(2, `Não consegui criar a trava da geração (${e.code ?? e.message}).`);
   }
-  return () => liberarTrava(trava);
+  return () => liberarTrava(trava, dono);
 }
 
-function travaAbandonada(trava) {
-  let pid;
-  let criadoEm;
-  try {
-    ({ pid, criadoEm } = JSON.parse(readFileSync(join(trava, NOME_ESTADO_TRAVA), 'utf8')));
-  } catch {
+function travaAbandonada(trava, { agora = Date.now, processoVivo: verificarPid = processoVivo } = {}) {
+  const estado = lerEstadoTrava(trava);
+  let criadoEm = estado?.criadoEm;
+  if (!Number.isFinite(criadoEm)) {
     try {
-      criadoEm = statSync(trava).mtimeMs;
+      criadoEm = Math.floor(statSync(trava).mtimeMs);
     } catch {
       criadoEm = 0;
     }
   }
-  const idade = Number.isFinite(criadoEm) ? Date.now() - criadoEm : Infinity;
-  if (idade > TEMPO_TRAVA_MS || idade < 0) return true;
-  if (Number.isInteger(pid) && pid > 0) {
-    try {
-      process.kill(pid, 0);
-      return false;
-    } catch (e) {
-      if (e.code === 'ESRCH') return true;
-    }
-  }
-  return false;
+  const idade = Number.isFinite(criadoEm) ? agora() - criadoEm : Infinity;
+  const vivo = Number.isInteger(estado?.pid) && estado.pid > 0 && verificarPid(estado.pid);
+  const limite = vivo ? TEMPO_TRAVA_VIVA_MS : TEMPO_TRAVA_MS;
+  return { abandonada: idade < 0 || idade >= limite, estado, idade, limite };
 }
 
-export function liberarTrava(trava, remover = rmSync) {
+export function liberarTrava(trava, dono, remover = rmSync) {
   try {
+    const estado = JSON.parse(readFileSync(join(trava, NOME_ESTADO_TRAVA), 'utf8'));
+    if (dono === undefined || dono === null || !mesmaTrava(estado, dono)) return;
     remover(trava, { recursive: true, force: true });
   } catch (e) {
+    if (e.code === 'ENOENT' && !existsSync(trava)) return;
     console.error(`Não consegui liberar a trava ${trava} (${e.code ?? e.message}). Remova-a somente se tiver certeza de que processo morreu.`);
   }
 }
